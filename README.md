@@ -5,4 +5,4 @@
  - simulation : 실행시 시각화  <br><br>  
 ---  
 episdoe 100  
-![2048_100](gif/2048_100.gif)
+![GIF](GIF/2048_100.gif) 
