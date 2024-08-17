@@ -22,7 +22,7 @@ agent = Agent(gamma=gamma,
 
 
 # 훈련된 모델 파일 경로
-model_filename = '2048dqn_model.pth'
+model_filename = 'Learning_models/2048dqn_model_100.pth'
 agent.load_model(model_filename)
 app = Game2048GUI(agent)
 app.mainloop()
