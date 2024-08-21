@@ -1,110 +1,85 @@
-import torch as T
+import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-import numpy as np
+import random
+from collections import deque
 
-class DeepQNetwork(nn.Module):
-    def __init__(self, lr, input_dims, n_actions):
-        super(DeepQNetwork, self).__init__()
-        self.conv1 = nn.Conv2d(input_dims[0], 64, kernel_size=2, stride=1)
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=2, stride=1)
-        
-        self.fc_input_dims = self.calculate_conv_output_dims(input_dims)
-        self.fc1 = nn.Linear(self.fc_input_dims, 256)
-        self.fc2 = nn.Linear(256, n_actions)
+class DQNetwork(nn.Module):
+    def __init__(self, input_shape, num_actions):
+        super(DQNetwork, self).__init__()
+        self.conv1 = nn.Conv2d(1, 128, kernel_size=2)
+        self.conv2 = nn.Conv2d(128, 128, kernel_size=2)
+        self.fc1 = nn.Linear(512, 128)
+        self.fc2 = nn.Linear(128, num_actions)
 
-        self.optimizer = optim.Adam(self.parameters(), lr=lr)
-        self.loss = nn.MSELoss()
+    def forward(self, x):
+        x = torch.relu(self.conv1(x))
+        x = torch.relu(self.conv2(x))
+        x = x.view(x.size(0), -1)
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
 
-    def calculate_conv_output_dims(self, input_dims):
-        state = T.zeros(1, *input_dims)
-        dims = self.conv1(state)
-        dims = self.conv2(dims)
-        return int(np.prod(dims.size()))
+            
 
-    def forward(self, state):
-        x = F.relu(self.conv1(state))
-        x = F.relu(self.conv2(x))
-        x = x.view(x.size()[0], -1)
-        x = F.relu(self.fc1(x))
-        actions = self.fc2(x)
+class Agent:
+    def __init__(self, env):
+        self.env = env
+        self.model = DQNetwork(env.observation_space, env.action_space)
+        self.target_model = DQNetwork(env.observation_space, env.action_space)
+        self.target_model.load_state_dict(self.model.state_dict())
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        self.loss_fn = nn.MSELoss()
+        self.replay_buffer = deque(maxlen=100000)
+        self.gamma = 0.99
+        self.batch_size = 64
+        self.epsilon = 1.0
+        self.epsilon_decay = 0.9999
+        self.min_epsilon = 0.01
 
-        return actions
-
-class Agent():
-    def __init__(self, gamma, epsilon, lr, input_dims, batch_size, n_actions,
-                 max_memory_size=100000, epsilon_min=0.01, epsilon_decay=5e-4):
-        self.gamma = gamma
-        self.epsilon = epsilon
-        self.epsilon_min = epsilon_min
-        self.epsilon_decay = epsilon_decay
-        self.lr = lr
-        self.action_space = [i for i in range(n_actions)]
-        self.mem_size = max_memory_size
-        self.batch_size = batch_size
-        self.mem_cntr = 0
-
-        self.Q_eval = DeepQNetwork(lr, input_dims=input_dims, n_actions=n_actions)
-
-        self.state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
-        self.new_state_memory = np.zeros((self.mem_size, *input_dims), dtype=np.float32)
-        self.action_memory = np.zeros(self.mem_size, dtype=np.int32)
-        self.reward_memory = np.zeros(self.mem_size, dtype=np.float32)
-        self.terminal_memory = np.zeros(self.mem_size, dtype=np.bool_)
-
-    def store_transition(self, state, action, reward, state_, done):
-        index = self.mem_cntr % self.mem_size
-        self.state_memory[index] = state
-        self.new_state_memory[index] = state_
-        self.reward_memory[index] = reward
-        self.action_memory[index] = action
-        self.terminal_memory[index] = done
-
-        self.mem_cntr += 1
+    def choose_action(self, state):
+        if random.random() < self.epsilon:
+            return random.randint(0, 3)
+        state = torch.tensor([state], dtype=torch.float)
+        q_values = self.model(state)
+        return torch.argmax(q_values).item()
     
-    def choose_action(self, observation):
-        if np.random.random() > self.epsilon:
-            state = T.tensor([observation], dtype=T.float)
-            actions = self.Q_eval.forward(state)
-            action = T.argmax(actions).item()
-        else:
-            action = np.random.choice(self.action_space)
+    def train(self):
+        if len(self.replay_buffer) < self.batch_size:
+            return
+        batch = random.sample(self.replay_buffer, self.batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
         
-        return action
-
-    def learn(self):
-        if self.mem_cntr < self.batch_size:
-            return 
-        self.Q_eval.optimizer.zero_grad()
-
-        max_mem = min(self.mem_cntr, self.mem_size)
-        batch = np.random.choice(max_mem, self.batch_size, replace=False)
-        batch_index = np.arange(self.batch_size, dtype=np.int32)
-
-        state_batch = T.tensor(self.state_memory[batch])
-        new_state_batch = T.tensor(self.new_state_memory[batch])
-        reward_batch = T.tensor(self.reward_memory[batch])
-        terminal_batch = T.tensor(self.terminal_memory[batch])
-
-        action_batch = self.action_memory[batch]
-
-        q_eval = self.Q_eval.forward(state_batch)[batch_index, action_batch]
-        q_next = self.Q_eval.forward(new_state_batch)
-        q_next[terminal_batch] = 0.0
-
-        q_target = reward_batch + self.gamma * T.max(q_next, dim=1)[0]
+        states = torch.FloatTensor(states)
+        actions = torch.LongTensor(actions)
+        rewards = torch.FloatTensor(rewards)
+        next_states = torch.FloatTensor(next_states)
+        dones = torch.FloatTensor(dones)
         
-        loss = self.Q_eval.loss(q_target, q_eval)
+        q_values = self.model(states)
+        next_q_values = self.target_model(next_states)
+        q_value = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
+        next_q_value = next_q_values.max(1)[0]
+        expected_q_value = rewards + self.gamma * next_q_value * (1 - dones)
+
+        loss = self.loss_fn(q_value, expected_q_value.detach())
+        self.optimizer.zero_grad()
         loss.backward()
-        self.Q_eval.optimizer.step()
+        self.optimizer.step()
 
-        self.epsilon = self.epsilon - self.epsilon_decay if self.epsilon > self.epsilon_min else self.epsilon_min
+        if self.epsilon > self.min_epsilon:
+            self.epsilon *= self.epsilon_decay
+
+    def update_target(self):
+        self.target_model.load_state_dict(self.model.state_dict())
+
+    def remember(self, state, action, reward, next_state, done):
+        self.replay_buffer.append((state, action, reward, next_state, done))
 
     def save_model(self, filename: str):
-        T.save(self.Q_eval.state_dict(), filename)
+        torch.save(self.model.state_dict(), filename)
         print(f"Model saved to {filename}")
 
     def load_model(self, filename: str):
-        self.Q_eval.load_state_dict(T.load(filename))
+        self.model.load_state_dict(torch.load(filename))
         print(f"Model loaded from {filename}")
