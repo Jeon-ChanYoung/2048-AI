@@ -1,79 +1,77 @@
 import tkinter as tk
 from tkinter import messagebox
 import numpy as np
+import math
 
 """
 Game2048 : 훈련 전용
 """
 class Game2048:
     def __init__(self):
-        self.board = np.zeros((4, 4), dtype=np.int_)
+        self.board = np.zeros((4,4), dtype=np.int_)
         self.add_tile()
         self.add_tile()
-
+    
     def add_tile(self):
-        empty_cells = list(zip(*np.where(self.board == 0)))
+        empty_cells = list(zip(*np.where(self.board == 0))) #[(행, 열), ... ] 16개
         if empty_cells:
             y, x = empty_cells[np.random.randint(0, len(empty_cells))]
-            self.board[y, x] = 2 if np.random.random() < 0.9 else 4
+            self.board[y, x] = [2, 4][np.random.random() > 0.9]
+    
+    def merge(self, row):
+        row = row[row != 0]
+        merged_row = []
+        
+        i = 0
+        while i < len(row):
+            if i+1 < len(row) and row[i] == row[i+1]:
+                merged_row.append(2*row[i])
+                i += 2
+            else:
+                merged_row.append(row[i])
+                i += 1
+        return np.array(merged_row + [0]*(4-len(merged_row)))
 
     def move_left(self):
         self.board = np.array([self.merge(row) for row in self.board])
-        self.add_tile()
-
+    
     def move_right(self):
         self.board = np.fliplr(self.board)
         self.move_left()
         self.board = np.fliplr(self.board)
-
+    
     def move_up(self):
         self.board = np.transpose(self.board)
         self.move_left()
         self.board = np.transpose(self.board)
-
+    
     def move_down(self):
-        self.board = np.transpose(np.fliplr(self.board))
-        self.move_left()
-        self.board = np.fliplr(np.transpose(self.board))
-
-    def merge(self, row):
-        row = row[row != 0]
-        merged_row = []
-        skip = False
-        for i in range(len(row)):
-            if skip:
-                skip = False
-                continue
-            if i + 1 < len(row) and row[i] == row[i + 1]:
-                merged_row.append(2 * row[i])
-                skip = True
-            else:
-                merged_row.append(row[i])
-        return np.array(merged_row + [0] * (4 - len(merged_row)))
+        self.board = np.transpose(self.board)
+        self.move_right()
+        self.board = np.transpose(self.board)          
 
     def is_done(self):
-        if not 0 in self.board:
-            for move in [self.move_left, self.move_right, self.move_up, self.move_down]:
-                copy_board = self.board.copy()
-                move()
-                if not np.array_equal(self.board, copy_board):
-                    self.board = copy_board
+        if 0 in self.board:
+            return False
+
+        for row in self.board:
+            for i in range(len(row) - 1):
+                if row[i] == row[i+1]:
                     return False
-            return True
-        return False
-    
+        
+        for col in self.board.T:
+            for i in range(len(col) - 1):
+                if col[i] == col[i+1]:
+                    return False
+        return True
+
     def get_state(self):
         return np.expand_dims(self.board, axis=0)
 
     def get_score(self):
         return np.max(self.board)
 
-    def print_board(self):
-        print(self.board)
-
     def step(self, action):
-        old_board = self.board.copy()
-        
         if action == 0:
             self.move_left()
         elif action == 1:
@@ -82,19 +80,105 @@ class Game2048:
             self.move_up()
         elif action == 3:
             self.move_down()
+        self.add_tile()
         
-        if np.array_equal(self.board, old_board):
-            reward = -5
-        else:
-            max_tile_diff = np.max(self.board) - np.max(old_board)
-            empty_spaces_diff = np.sum(self.board == 0) - np.sum(old_board == 0)
-            reward = max_tile_diff + np.max(self.board) * 0.1 - empty_spaces_diff * 0.1
-        
+        n_empty = len(self.board[self.board == 0])
+        reward = self.evaluation(self.board, n_empty)
         done = self.is_done()
-        if done:
-            reward -= 100
-        
+
         return self.get_state(), reward, done
+
+    def evaluation(self, grid, n_empty):
+        score = 0
+
+        # grid sum
+        big_t = np.sum(np.power(grid, 2))
+
+        # smoothness
+        smoothness = 0
+        s_grid = np.sqrt(grid)
+
+        smoothness -= np.sum(np.abs(s_grid[:, 0] - s_grid[:, 1]))
+        smoothness -= np.sum(np.abs(s_grid[:, 1] - s_grid[:, 2]))
+        smoothness -= np.sum(np.abs(s_grid[:, 2] - s_grid[:, 3]))
+        smoothness -= np.sum(np.abs(s_grid[0, :] - s_grid[1, :]))
+        smoothness -= np.sum(np.abs(s_grid[1, :] - s_grid[2, :]))
+        smoothness -= np.sum(np.abs(s_grid[2, :] - s_grid[3, :]))
+
+        # monotonicity
+        monotonic_up = 0
+        monotonic_down = 0
+        monotonic_left = 0
+        monotonic_right = 0
+
+        for x in range(4):
+            current = 0
+            next = current + 1
+            while next < 4:
+                while next < 3 and not grid[next, x]:
+                    next += 1
+                current_cell = grid[current, x]
+                current_value = math.log(current_cell, 2) if current_cell else 0
+                next_cell = grid[next, x]
+                next_value = math.log(next_cell, 2) if next_cell else 0
+                if current_value > next_value:
+                    monotonic_up += (next_value - current_value)
+                elif next_value > current_value:
+                    monotonic_down += (current_value - next_value)
+                current = next
+                next += 1
+
+        for y in range(4):
+            current = 0
+            next = current + 1
+            while next < 4:
+                while next < 3 and not grid[y, next]:
+                    next += 1
+                current_cell = grid[y, current]
+                current_value = math.log(current_cell, 2) if current_cell else 0
+                next_cell = grid[y, next]
+                next_value = math.log(next_cell, 2) if next_cell else 0
+                if current_value > next_value:
+                    monotonic_left += (next_value - current_value)
+                elif next_value > current_value:
+                    monotonic_right += (current_value - next_value)
+                current = next
+                next += 1
+
+        monotonic = max(monotonic_up, monotonic_down) + max(monotonic_left, monotonic_right)
+        
+        # weight for each score
+        empty_w = 100000
+        smoothness_w = 3
+        monotonic_w = 10000
+
+        empty_u = n_empty * empty_w
+        smooth_u = smoothness ** smoothness_w
+        monotonic_u = monotonic * monotonic_w
+
+        score += big_t
+        score += empty_u
+        score += smooth_u
+        score += monotonic_u
+
+        return score
+    
+class Game2048Env:
+    def __init__(self):
+        self.game = Game2048()
+        self.action_space = 4  # Left, Right, Up, Down
+        self.observation_space = (4, 4)
+
+    def reset(self):
+        self.game = Game2048()
+        return self.game.get_state()
+
+    def step(self, action):
+        state, reward, done = self.game.step(action)
+        return state, reward, done, {}
+
+    def render(self):
+        print(self.game.board)
 
 """
 Game2048GUI : 시각화 전용
@@ -124,7 +208,7 @@ class Game2048GUI(tk.Tk):
                 messagebox.showinfo("Game Over", f"Game Over! Final Score: {self.game.get_score()}")
                 self.quit()  # End the simulation
             else:
-                self.after(100, self.simulate_game)  # Continue simulation
+                self.after(100, self.simulate_game)  # Continue simulation    
 
     def update_board(self):
         self.canvas.delete("all")
