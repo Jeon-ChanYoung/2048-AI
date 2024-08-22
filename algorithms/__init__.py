@@ -1,2 +1,2 @@
-from .Alpha_Beta_Pruning import *
-from .Minimax import *
+from .Alpha_Beta_Pruning import Alpha_Beta_Pruning
+from .Minimax import Minimax
