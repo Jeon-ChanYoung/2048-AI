@@ -1,22 +1,44 @@
-import tkinter as tk
-from tkinter import messagebox
 import numpy as np
 import math
+from copy import deepcopy
 
-"""
-Game2048 : 훈련 전용
-"""
 class Game2048:
     def __init__(self):
         self.board = np.zeros((4,4), dtype=np.int_)
-        self.add_tile()
-        self.add_tile()
+        self.add_random_tile()
+        self.add_random_tile()
+
+    def add_random_tile(self):
+        empty_cells = list(zip(*np.where(self.board == 0)))
+        if not empty_cells:
+            return False
+        y, x = empty_cells[np.random.choice(len(empty_cells))]
+        self.board[y, x] = np.random.choice([2, 4], p=[0.9, 0.1])
+        return True
     
-    def add_tile(self):
+    def add_tile(self, depth):
+        n_empty = len(self.board[self.board == 0])
+        if n_empty >= 6 and depth >= 3:
+            return self.evaluation(self.board, n_empty)
+        if n_empty >= 0 and depth >= 5:
+            return self.evaluation(self.board, n_empty)
+        if n_empty == 0:
+            _, new_score = self.maximize(depth+1)
+        sum_score = 0
+
         empty_cells = list(zip(*np.where(self.board == 0))) #[(행, 열), ... ] 16개
-        if empty_cells:
-            y, x = empty_cells[np.random.randint(0, len(empty_cells))]
-            self.board[y, x] = [2, 4][np.random.random() > 0.9]
+        for y,x in empty_cells:
+            for num in [2, 4]:
+                new_game = deepcopy(self)  
+                new_game.board[y, x] = num
+                _, new_score = new_game.maximize(depth+1)
+
+                if num == 2:
+                    new_score *= (0.9 / n_empty)
+                else:
+                    new_score *= (0.1 / n_empty)
+                sum_score += new_score
+        return sum_score
     
     def merge(self, row):
         row = row[row != 0]
@@ -72,6 +94,7 @@ class Game2048:
         return np.max(self.board)
 
     def step(self, action):
+        previous_board = self.board.copy()
         if action == 0:
             self.move_left()
         elif action == 1:
@@ -80,8 +103,11 @@ class Game2048:
             self.move_up()
         elif action == 3:
             self.move_down()
-        self.add_tile()
-        
+
+        changed = not np.array_equal(previous_board, self.board)
+        if changed:
+            self.add_random_tile()
+
         n_empty = len(self.board[self.board == 0])
         reward = self.evaluation(self.board, n_empty)
         done = self.is_done()
@@ -91,10 +117,8 @@ class Game2048:
     def evaluation(self, grid, n_empty):
         score = 0
 
-        # grid sum
         big_t = np.sum(np.power(grid, 2))
 
-        # smoothness
         smoothness = 0
         s_grid = np.sqrt(grid)
 
@@ -105,7 +129,6 @@ class Game2048:
         smoothness -= np.sum(np.abs(s_grid[1, :] - s_grid[2, :]))
         smoothness -= np.sum(np.abs(s_grid[2, :] - s_grid[3, :]))
 
-        # monotonicity
         monotonic_up = 0
         monotonic_down = 0
         monotonic_left = 0
@@ -147,7 +170,6 @@ class Game2048:
 
         monotonic = max(monotonic_up, monotonic_down) + max(monotonic_left, monotonic_right)
         
-        # weight for each score
         empty_w = 100000
         smoothness_w = 3
         monotonic_w = 10000
@@ -162,67 +184,20 @@ class Game2048:
         score += monotonic_u
 
         return score
-    
-class Game2048Env:
-    def __init__(self):
-        self.game = Game2048()
-        self.action_space = 4  # Left, Right, Up, Down
-        self.observation_space = (4, 4)
 
-    def reset(self):
-        self.game = Game2048()
-        return self.game.get_state()
+    def maximize(self, depth=0):
+        best_score = -np.inf
+        best_action = None
 
-    def step(self, action):
-        state, reward, done = self.game.step(action)
-        return state, reward, done, {}
+        for action in range(4):
+            new_game = deepcopy(self)
+            new_game.step(action)
+            if np.array_equal(new_game.board, self.board):
+                continue
 
-    def render(self):
-        print(self.game.board)
+            new_score = new_game.add_tile(depth + 1)
+            if best_score <= new_score:
+                best_score = new_score
+                best_action = action
 
-"""
-Game2048GUI : 시각화 전용
-"""
-
-class Game2048GUI(tk.Tk):
-    def __init__(self, agent):
-        super().__init__()
-        self.title("2048 Game Simulation")
-        self.agent = agent
-        self.game = Game2048()
-        self.create_widgets()
-        self.update_board()
-        self.after(100, self.simulate_game)  # Start simulation after 100 ms
-
-    def create_widgets(self):
-        self.canvas = tk.Canvas(self, width=400, height=400, bg="lightgray")
-        self.canvas.pack()
-
-    def simulate_game(self):
-        if not self.game.is_done():
-            state = self.game.get_state()
-            action = self.agent.choose_action(state)
-            _, _, done = self.game.step(action)
-            self.update_board()
-            if done:
-                messagebox.showinfo("Game Over", f"Game Over! Final Score: {self.game.get_score()}")
-                self.quit()  # End the simulation
-            else:
-                self.after(100, self.simulate_game)  # Continue simulation    
-
-    def update_board(self):
-        self.canvas.delete("all")
-        tile_colors = {0: "lightgray", 2: "#eee4da", 4: "#ede0c8", 8: "#f2b179", 16: "#f59563",
-                       32: "#f67c5f", 64: "#f65e3b", 128: "#edcf72", 256: "#edcc61", 512: "#edc850",
-                       1024: "#edc53f", 2048: "#edc22e"}
-        
-        for i in range(4):
-            for j in range(4):
-                value = self.game.board[i, j]
-                x1, y1 = j * 100, i * 100
-                x2, y2 = x1 + 100, y1 + 100
-                color = tile_colors.get(value, "black")
-                self.canvas.create_rectangle(x1, y1, x2, y2, fill=color, outline="white")
-                if value != 0:
-                    self.canvas.create_text((x1 + x2) / 2, (y1 + y2) / 2, text=str(value), font=("Arial", 24, "bold"))
-
+        return best_action, best_score
