@@ -1,12 +1,12 @@
-from Game2048 import Game2048
+from algorithms import *
 from tkinter import messagebox
 import tkinter as tk
 
 class Game2048GUI(tk.Tk):
-    def __init__(self):
+    def __init__(self, game):
         super().__init__()
         self.title("2048 Game Simulation")
-        self.game = Game2048()
+        self.game = game
         self.create_widgets()
         self.update_board()
         self.after(1, self.simulate_game)  # Start simulation after 100 ms
